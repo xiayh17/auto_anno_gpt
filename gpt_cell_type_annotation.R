@@ -3,7 +3,9 @@
 
 ## 注释函数
 ## modified from the https://github.com/Winnie09/GPTCelltype/tree/master
-gptcelltype <- function(input, tissuename=NULL, model='gpt-3.5-turbo', topgenenumber = 10, base_url='https://api.openai.com/v1') {
+gptcelltype <- function(input, tissuename=NULL, model='gpt-3.5-turbo', topgenenumber = 10, 
+                        p_val_adj.threshold = 0.05, avg_log2FC.threshold = 0, 
+                        base_url='https://api.openai.com/v1') {
   OPENAI_API_KEY <- Sys.getenv("OPENAI_API_KEY")
   if (OPENAI_API_KEY == "") {
     message("Note: OpenAI API key not found: returning the prompt itself.")
@@ -25,8 +27,15 @@ gptcelltype <- function(input, tissuename=NULL, model='gpt-3.5-turbo', topgenenu
   if (class(input) == 'list') {
     input <- sapply(input, paste, collapse=',')
   } else {
-    input <- input[input$avg_log2FC > 0, , drop=FALSE]
+    input <- input[input$avg_log2FC > avg_log2FC.threshold & input$p_val_adj < p_val_adj.threshold, , drop=FALSE]
     input <- tapply(input$gene, list(input$cluster), function(i) paste0(i[1:min(topgenenumber, length(i))], collapse=','))
+  }
+
+  ## check input length
+  if (length(input) == 0) {
+    stop("No input provided. Please check your input data.")
+  } else if (length(input) < topgenenumber) {
+     message("Note: The number of input markers is less than the topgenenumber. Please check your input data.")
   }
 
   # Create OpenAI client with custom base_url if provided
