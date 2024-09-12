@@ -1,0 +1,166 @@
+---
+title: "Cell Type Annotation using GPT-4 for Spatial Transcriptomics Data"
+output: html_document
+---
+
+Modified from `find_marker.Rmd` and 'https://github.com/satijalab/seurat/blob/HEAD/vignettes/spatial_vignette.Rmd'
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load required libraries
+
+```{r libraries}
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+```
+
+## Load and preprocess the Visium spatial transcriptomics data
+
+```{r load_data}
+# Load the Visium data
+# InstallData("stxBrain")
+brain <- LoadData('stxBrain', type = 'anterior1')
+
+# Normalize the data
+brain <- SCTransform(brain, assay = "Spatial", verbose = FALSE)
+
+# Perform dimensionality reduction and clustering
+brain <- RunPCA(brain, assay = "SCT", verbose = FALSE)
+brain <- FindNeighbors(brain, reduction = "pca", dims = 1:30)
+brain <- FindClusters(brain, verbose = FALSE)
+brain <- RunUMAP(brain, reduction = "pca", dims = 1:30)
+```
+
+## Visualize the clustering results
+
+```{r visualize_clusters}
+p1 <- DimPlot(brain, reduction = "umap", label = TRUE)
+p2 <- SpatialDimPlot(brain, label = TRUE, label.size = 3)
+p1 + p2
+```
+
+## Find marker genes for each cluster
+
+```{r find_markers}
+all_markers <- FindAllMarkers(brain, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+top_markers <- all_markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+## GPT-4 Cell Type Annotation
+
+```{r gpt_annotation}
+# Load the GPT-4 annotation function
+source('gpt_cell_type_annotation.R')
+
+# Set up parameters
+base_url = 'https://api.openai.com/v1'
+Sys.setenv(OPENAI_API_KEY = "sk-balabalabalabalabalabalabalabala")
+tissuename = 'mouse brain'
+model = 'gpt-4o-mini-2024-07-18'
+topgenenumber = 10
+
+# Perform GPT-4 annotation
+gpt_cell_types <- gptcelltype(all_markers, tissuename = tissuename, model = model, topgenenumber = topgenenumber, base_url = base_url)
+```
+```{r}
+Idents(brain) <- 'seurat_clusters'
+```
+
+
+```{r}
+update_seurat_celltypes <- function(seurat_obj, annotation_results, cluster_column = "Cluster", celltype_column = "Cell_Type") {
+  print("Seurat object clusters:")
+  print(table(Idents(seurat_obj)))
+  
+  print("Annotation results:")
+  print(annotation_results)
+  
+  # 创建从集群到细胞类型的映射
+  celltype_map <- setNames(annotation_results[[celltype_column]], annotation_results[[cluster_column]])
+  print("Celltype map:")
+  print(celltype_map)
+  
+  # 获取当前的集群标识符
+  current_idents <- as.character(Idents(seurat_obj))
+  print("Current idents (first 10):")
+  print(head(current_idents, 10))
+  
+  # 为每个细胞分配细胞类型
+  new_celltypes <- celltype_map[current_idents]
+  print("New celltypes (first 10):")
+  print(head(new_celltypes, 10))
+  
+  # Replace NA values with "unknown"
+  new_celltypes[is.na(new_celltypes)] <- "unknown"
+  
+  print("Number of 'unknown' values in new_celltypes:")
+  print(sum(new_celltypes == "unknown"))
+  
+  # 确保 new_celltypes 的名称与 Seurat 对象的元数据行名称匹配
+  names(new_celltypes) <- rownames(seurat_obj@meta.data)
+  
+  # 直接将新的细胞类型添加到 Seurat 对象的元数据中
+  seurat_obj <- AddMetaData(seurat_obj, metadata = new_celltypes, col.name = "celltype")
+  seurat_obj <- AddMetaData(seurat_obj, metadata = current_idents, col.name = "original_clusters")
+  
+  print("Metadata after adding celltype (first 5 rows):")
+  print(head(seurat_obj@meta.data, 5))
+  
+  return(seurat_obj)
+}
+
+# Add GPT-4 annotations to the Seurat object
+brain <- update_seurat_celltypes(brain, gpt_cell_types, cluster_column = "Cluster", celltype_column = "Cell_Type")
+
+# Set the new cell types as the active identities
+Idents(brain) <- "celltype"
+```
+
+## Visualize GPT-4 annotations
+
+```{r visualize_gpt_annotations}
+p3 <- DimPlot(brain, reduction = "umap", group.by = "celltype", label = TRUE, repel = TRUE,label.size = 3) +
+  ggtitle("GPT-4 Cell Type Annotations (UMAP)")
+p4 <- SpatialDimPlot(brain, group.by = "celltype", label = TRUE, label.size = 3) +
+  ggtitle("GPT-4 Cell Type Annotations (Spatial)")
+ggsave(filename = "p3_p4.png", plot = p3 / p4, width = 30, height = 20, dpi = 300)
+```
+
+```{r visualize_gpt_annotations_png}
+# show the png "p3_p4.png"
+knitr::include_graphics("p3_p4.png")
+```
+
+## Save results
+
+```{r save_results}
+# 方法 2: 使用 CSV 格式. 方便用Excel 查看
+write_csv_with_preserved_newlines <- function(data, file) {
+  # 使用 write.csv 来处理包含换行符的字段
+  write.csv(data, file = file, row.names = FALSE)
+  
+  message(sprintf("Data written to %s in CSV format with preserved newlines", file))
+}
+
+# Save the annotated Seurat object
+saveRDS(brain, file = "brain_annotated.rds")
+
+# Save the GPT-4 annotation results
+write_csv_with_preserved_newlines(gpt_cell_types, file = "gpt4_cell_type_annotations.csv")
+
+# Save the visualization
+ggsave("gpt4_annotations_umap_spatial.png", plot = p3 / p4, width = 30, height = 20, dpi = 300)
+```
+
+```{r save_results_png}
+# show the png "gpt4_annotations_umap_spatial.png"
+knitr::include_graphics("gpt4_annotations_umap_spatial.png")
+```
+
+This updated version of `find_marker.Rmd` uses the actual Visium spatial transcriptomics data and incorporates the scRNA-seq reference data for comparison. It provides a more realistic workflow for using GPT-4 to annotate cell types in spatial transcriptomics data and comparing the results with a reference dataset.
