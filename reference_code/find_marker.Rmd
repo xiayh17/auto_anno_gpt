@@ -1,0 +1,229 @@
+
+
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+embryo <- Read10X(data.dir = "raw_feature_bc_matrix")
+embryo_obj <- CreateSeuratObject(counts = embryo)
+imgpath <- "spatial"
+img <- Read10X_Image(image.dir = imgpath, image.name = "tissue_lowres_image.png")
+Seurat::DefaultAssay(object = img) <- 'Spatial'
+embryo_obj[['image']] <- img
+
+embryo_obj <- NormalizeData(embryo_obj, 
+                            normalization.method = "LogNormalize", 
+                            scale.factor = 10000)
+
+sample_info <- read.table("sample_tissue.txt", header = FALSE, sep="\t", row.names = 1)
+colnames(sample_info) <- "sample"
+sample_info$sample <- ifelse(sample_info$sample == 0, "Sample_A", "Sample_B")
+
+embryo_obj <- AddMetaData(embryo_obj, sample_info)
+
+Sample_A <- subset(embryo_obj, subset = sample == "Sample_A")
+Sample_B <- subset(embryo_obj, subset = sample == "Sample_B")
+```
+
+```{r}
+Sample_A_cluster <- read.table("sample_A_cluster.txt", header = FALSE, sep="\t", row.names = 1)
+colnames(Sample_A_cluster) <- "cluster"
+```
+
+
+```{r}
+Sample_A <- AddMetaData(Sample_A, Sample_A_cluster)
+Idents(Sample_A) <- 'cluster'
+Sample_A <- FindVariableFeatures(Sample_A, selection.method = "vst", nfeatures = 1000)
+all.genes <- rownames(Sample_A)
+Sample_A <- ScaleData(Sample_A, features = all.genes)
+Sample_A.de.markers <- FindAllMarkers(Sample_A, min.pct = 0.25, min.cells.group = 1, logfc.threshold = 1) 
+write.table(Sample_A.de.markers, file = "Sample_A_cluster_markers.txt", quote = FALSE, sep = "\t")
+
+Sample_B_cluster <- read.table("sample_B_cluster.txt", header = FALSE, sep="\t", row.names = 1)
+colnames(Sample_B_cluster) <- "cluster"
+Sample_B <- AddMetaData(Sample_B, Sample_B_cluster)
+Idents(Sample_B) <- 'cluster'
+all.genes <- rownames(Sample_B)
+Sample_B <- ScaleData(Sample_B, features = all.genes)
+Sample_B.de.markers <- FindAllMarkers(Sample_A, min.pct = 0.25, min.cells.group = 1, logfc.threshold = 1) 
+write.table(Sample_B.de.markers, file = "Sample_B_cluster_markers.txt", quote = FALSE, sep = "\t")
+```
+
+```{r}
+## 模型输出的写出方式
+# 方法 1: 替换换行符
+write_table_with_replaced_newlines <- function(data, file, newline_replacement = " [NEWLINE] ") {
+  # 替换 Explanation 列中的换行符
+  data$Explanation <- gsub("\n", newline_replacement, data$Explanation)
+  
+  # 写入文件
+  write.table(data, file = file, quote = TRUE, sep = "\t", row.names = FALSE)
+  
+  message(sprintf("Data written to %s with newlines replaced by '%s'", file, newline_replacement))
+}
+
+# 方法 2: 使用 CSV 格式. 方便用Excel 查看
+write_csv_with_preserved_newlines <- function(data, file) {
+  # 使用 write.csv 来处理包含换行符的字段
+  write.csv(data, file = file, row.names = FALSE)
+  
+  message(sprintf("Data written to %s in CSV format with preserved newlines", file))
+}
+```
+
+
+```{r}
+# ## 安装包
+# # remotes::install_github("irudnyts/openai", ref = "r6")
+# ## 载入函数
+# source('gpt_cell_type_annotation.R')
+# base_url = 'https://aihubmix.com/v1'
+# ## 设置密钥
+# Sys.setenv(OPENAI_API_KEY = "sk-ababababababbaabbaabbabababbabababababba")
+# ## 设置组织类型
+# tissuename = 'your tissue name'
+# ## 设置模型
+# model = 'gpt-4o-2024-08-06'
+# ## 设置topgenenumber
+# topgenenumber = 10
+# 
+# 对 cluster 进行细胞类型注释
+message("Reading cluster markers...")
+Sample_A_cluster_markers <- read.table("Sample_A_cluster_markers.txt", header = TRUE, sep = "\t")
+message("Annotating cell types using GPT model...")
+Sample_A_cell_types <- gptcelltype(Sample_A_cluster_markers, tissuename = tissuename, model = model, topgenenumber = topgenenumber, base_url = base_url)
+
+
+# 确保返回的数据框包含 Cell_Type 和 Explanation 列
+if (!all(c("Cell_Type", "Explanation") %in% colnames(Sample_A_cell_types))) {
+  stop("gptcelltype function must return a data frame with 'Cell_Type' and 'Explanation' columns.")
+}
+
+message("Reading cluster markers...")
+Sample_B_cluster_markers <- read.table("Sample_B_cluster_markers.txt", header = TRUE, sep = "\t")
+message("Annotating cell types using GPT model...")
+Sample_B_cell_types <- gptcelltype(Sample_B_cluster_markers, tissuename = tissuename, model = model, topgenenumber = topgenenumber, base_url = base_url)
+
+# 确保返回的数据框包含 Cell_Type 和 Explanation 列
+if (!all(c("Cell_Type", "Explanation") %in% colnames(Sample_B_cell_types))) {
+  stop("gptcelltype function must return a data frame with 'Cell_Type' and 'Explanation' columns.")
+}
+
+message("Cell type annotation completed.")
+```
+
+```{r}
+# res_dir = paste0("top",topgenenumber)
+# # 使用方法 1
+write_table_with_replaced_newlines(Sample_A_cell_types, file = paste0(res_dir, "/Sample_A_cell_types_explanation.txt"))
+# 
+# # 或者使用方法 2
+write_csv_with_preserved_newlines(Sample_A_cell_types, file = paste0(res_dir, "/Sample_A_cell_types_explanation.csv"))
+# 
+# # 使用方法 1
+write_table_with_replaced_newlines(Sample_B_cell_types, file = paste0(res_dir, "/Sample_B_cell_types_explanation.txt"))
+# 
+# # 或者使用方法 2
+write_csv_with_preserved_newlines(Sample_B_cell_types, file = paste0(res_dir, "/Sample_B_cell_types_explanation.csv"))
+```
+
+```{r}
+update_seurat_celltypes <- function(seurat_obj, annotation_results, cluster_column = "Cluster", celltype_column = "Cell_Type") {
+  print("Seurat object clusters:")
+  print(table(Idents(seurat_obj)))
+  
+  print("Annotation results:")
+  print(annotation_results)
+  
+  # 创建从集群到细胞类型的映射
+  celltype_map <- setNames(annotation_results[[celltype_column]], annotation_results[[cluster_column]])
+  print("Celltype map:")
+  print(celltype_map)
+  
+  # 获取当前的集群标识符
+  current_idents <- as.character(Idents(seurat_obj))
+  print("Current idents (first 10):")
+  print(head(current_idents, 10))
+  
+  # 为每个细胞分配细胞类型
+  new_celltypes <- celltype_map[current_idents]
+  print("New celltypes (first 10):")
+  print(head(new_celltypes, 10))
+  
+  # Replace NA values with "unknown"
+  new_celltypes[is.na(new_celltypes)] <- "unknown"
+  
+  print("Number of 'unknown' values in new_celltypes:")
+  print(sum(new_celltypes == "unknown"))
+  
+  # 确保 new_celltypes 的名称与 Seurat 对象的元数据行名称匹配
+  names(new_celltypes) <- rownames(seurat_obj@meta.data)
+  
+  # 直接将新的细胞类型添加到 Seurat 对象的元数据中
+  seurat_obj <- AddMetaData(seurat_obj, metadata = new_celltypes, col.name = "celltype")
+  seurat_obj <- AddMetaData(seurat_obj, metadata = current_idents, col.name = "original_clusters")
+  
+  print("Metadata after adding celltype (first 5 rows):")
+  print(head(seurat_obj@meta.data, 5))
+  
+  return(seurat_obj)
+}
+```
+
+```{r}
+# Function to visualize and save plots
+visualize_and_save <- function(seurat_obj, topgenenumber, height = 20, width = 20, dpi = 900, prefix = "Sample_A") {
+  res_dir = paste0("top", topgenenumber)
+  cell_types = read.csv(paste0(res_dir, "/", prefix, "_cell_types_explanation.txt"), sep = "\t")
+  
+  ## head data
+  message(head(cell_types))
+  
+  # Update Seurat object with cell types
+  updated_obj <- update_seurat_celltypes(seurat_obj, cell_types, 
+                                         cluster_column = "Cluster",
+                                         celltype_column = "Cell_Type")
+  
+  # Set new cell types as Idents
+  Idents(updated_obj) <- "celltype"
+  
+  # Check for NA values in new cell types
+  if (any(is.na(Idents(updated_obj)))) {
+    warning("There are NA values in the new cell types. These cells will be excluded from the plots.")
+    updated_obj <- subset(updated_obj, cells = WhichCells(updated_obj, idents = !is.na(Idents(updated_obj))))
+  }
+  
+  # Plot UMAP if available
+  # if ("umap" %in% names(updated_obj@reductions)) {
+  #   umap_plot <- DimPlot(updated_obj, reduction = "umap", group.by = "celltype", label = TRUE, repel = TRUE) + 
+  #                ggtitle(paste0(prefix, " Cell Types (top", topgenenumber, ")"))
+  #   print(umap_plot)
+  #   ggsave(filename = paste0(res_dir, "/", prefix, "_cell_types_umap.png"), plot = umap_plot, height = height, width = width, dpi = dpi)
+  # } else {
+  #   print("UMAP reduction not found. Please run UMAP before plotting.")
+  # }
+  
+  # Plot SpatialDimPlot
+  spatial_plot <- SpatialDimPlot(updated_obj, group.by = "celltype", label = TRUE, repel = TRUE) + 
+                  ggtitle(paste0(prefix, " Cell Types (top", topgenenumber, ")"))
+  print(spatial_plot)
+  ggsave(filename = paste0(res_dir, "/", prefix, "_cell_types_spatial.png"), plot = spatial_plot, height = height, width = width, dpi = dpi)
+}
+```
+
+```{r}
+# # Visualize and save for topgenenumber = 10
+visualize_and_save(Sample_A, topgenenumber = 10, prefix = "Sample_A")
+# 
+# # Visualize and save for topgenenumber = 20
+visualize_and_save(Sample_B, topgenenumber = 20, prefix = "Sample_A")
+
+# Visualize and save for topgenenumber = 10
+visualize_and_save(Sample_A, topgenenumber = 10, prefix = "Sample_B")
+
+# Visualize and save for topgenenumber = 20
+visualize_and_save(Sample_B, topgenenumber = 20, prefix = "Sample_B")
+```
+
