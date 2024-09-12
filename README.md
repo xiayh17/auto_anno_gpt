@@ -4,7 +4,7 @@ This repository contains an R script demonstrating the use of GPT-4 for cell typ
 
 ## Overview
 
-The script `find_marker.Rmd` provides a workflow for:
+The script `find_marker_vignette.Rmd` provides a workflow for:
 
 1. Loading and preprocessing Visium spatial transcriptomics data
 2. Performing dimensionality reduction and clustering
@@ -33,7 +33,7 @@ The script uses the following datasets:
 ## Usage
 
 1. Clone this repository
-2. Open `find_marker.Rmd` in RStudio
+2. Open `find_marker_vignette.Rmd` in RStudio
 3. Install required packages
 4. Run the script chunk by chunk
 
